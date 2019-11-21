@@ -18,6 +18,8 @@
 #define KAFKA_ERR_PRODUCER "kafka_producer_error\n"
 
 #define KAFKA_PARTITION_UNSET 0xFFFFFFFF
+#define KAFKA_MAX_KEY         128
+#define KAFKA_MAX_URI         1024
 
 static ngx_int_t ngx_http_kafka_init_worker(ngx_cycle_t *cycle);
 static void ngx_http_kafka_exit_worker(ngx_cycle_t *cycle);
@@ -354,8 +356,8 @@ static ngx_int_t ngx_http_kafka_handler(ngx_http_request_t *r)
 static void ngx_http_kafka_post_callback_handler(ngx_http_request_t *r)
 {
     int                          rc, nbufs;
-    u_char                      *msg, *err_msg;
-    size_t                       len, err_msg_size;
+    u_char                      *msg, *err_msg, key[KAFKA_MAX_KEY] = {};
+    size_t                       len, err_msg_size, key_len = 0;
     ngx_log_t                   *conn_log;
     ngx_buf_t                   *buf;
     ngx_chain_t                  out;
@@ -448,9 +450,38 @@ static void ngx_http_kafka_post_callback_handler(ngx_http_request_t *r)
      * Thanks for engineers of www.360buy.com report me this bug.
      *
      * */
+
     conn_log = r->connection->log;
-    rc = rd_kafka_produce(local_conf->rkt, (int32_t)local_conf->partition,
-            RD_KAFKA_MSG_F_COPY, (void *)msg, len, NULL, 0, conn_log);
+    
+    char *last_pos = strchr((const char*)r->uri.data, ' ');
+    if(last_pos) {
+	*last_pos = '\0';	
+    } 
+
+    char *pos = strrchr((const char*)r->uri.data, '/');
+    if(last_pos && pos) {
+        key_len = (last_pos - (pos+1));
+    } else if (pos) {
+        key_len = (r->uri.len - ((pos+1) - (char*)r->uri.data));
+    }
+
+    if(last_pos) {
+        *last_pos = ' ';
+    }
+
+    if(key_len > KAFKA_MAX_KEY) {
+	key_len = KAFKA_MAX_KEY;
+    }
+
+    if(key_len) {
+	    memcpy(key, (pos+1), key_len);
+	    rc = rd_kafka_produce(local_conf->rkt, (int32_t)local_conf->partition,
+			    RD_KAFKA_MSG_F_COPY, (void *)msg, len, key, key_len, conn_log);
+    } else {
+	    rc = rd_kafka_produce(local_conf->rkt, (int32_t)local_conf->partition,
+			    RD_KAFKA_MSG_F_COPY, (void *)msg, len, NULL, 0, conn_log);
+    }
+
     if (rc != 0) {
         ngx_log_error(NGX_LOG_ERR, conn_log, 0,
                 rd_kafka_err2str(rd_kafka_last_error()));
